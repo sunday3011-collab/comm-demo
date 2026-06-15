@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+
+# 误建的空嵌套 git 仓库, 不纳入版本管理
+/comm-demo/
