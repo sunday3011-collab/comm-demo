@@ -9,12 +9,14 @@ Single-file 5G NR DSP simulation (`nr_subband_stitch.py`). One OFDM symbol (100M
 then demodulated two ways whose results are compared:
 
 - **Path A (`fullband_demod`)** — direct 4096-FFT, the golden reference.
-- **Path B (`subband_demod`)** — models a chip that cannot do a 4096-FFT: split into 5 subbands
-  (RB=[55,54,55,54,55]), each `DDC → circular LPF → decimate 4× → 1024-FFT → extract subcarriers`,
-  then stitch back into the full 3276.
+- **Path B (`subband_demod`)** — models a chip that cannot do a 4096-FFT, split into a mid-RF (IF) and
+  baseband (BB) stage over 5 subbands (RB=[55,54,55,54,55]):
+  - IF: `DDC → circular LPF → decimate 4× → apply actual_delay` (IF→BB transfer delay, time domain pre-FFT)
+  - BB: `1024-FFT → phase comp (FIR group delay + comp_delay) → stitch` into the full 3276.
 
-`main()` runs the whole flow for two test signals (`'qpsk'`, `'ones'`), prints max/mean amplitude (dB)
-and phase (deg) differences, and saves `result_<mode>.png`.
+`main()` runs the whole flow for two test signals (`'qpsk'`, `'ones'`) with matched delays, plus one
+mismatched-delay control run, prints max/mean amplitude (dB) and phase (deg) differences, saves
+`result_<mode>.png`.
 
 ## Commands
 
@@ -41,9 +43,15 @@ Other non-obvious points:
 
 - **Scaling**: subband path multiplies by `D` to undo the `1/D` amplitude from decimation; the full-band
   path needs no factor because numpy `fft∘ifft` is identity. Verify via the `'ones'` run staying ~0 dB.
-- **Group-delay compensation** is the headline metric. Raw phase difference is dominated by the FIR's
-  linear-phase ramp (~180° sawtooth, per subband); `subband_demod` returns both `stitched_comp`
-  (compensated, via `exp(+j·2π·(s−c)·g/NFFT)`) and `stitched_raw`.
+- **Phase compensation** is the headline metric. Raw phase is dominated by the FIR linear-phase ramp
+  (~180° sawtooth) plus any transfer delay; `subband_demod` returns both `stitched_comp` (compensated)
+  and `stitched_raw`. Compensation has two independent terms on signed offset `m = s − center`:
+  `exp(+j·2π·m·g/NFFT)` (FIR group delay `g`, full-rate domain) and
+  `exp(+j·2π·m·comp_delay/NSUB)` (per-subband transfer delay, decimated domain).
+- **Per-subband transfer delay** (`ACTUAL_DELAYS`/`COMP_DELAYS`, decimated samples, fractional ok):
+  `actual_delay` is applied via `apply_circular_delay` on the 1024-point decimated signal *before* FFT;
+  `comp_delay` is the frequency-domain inverse. Matched → exact cancellation (all `|m| < NSUB/2`, so
+  `fftfreq` bin = signed `m` exactly); a Δ mismatch grows phase error as `360·m·Δ/NSUB` deg.
 - **Filtering is circular** (`circular_filter`, FFT-based) on purpose — the symbol is treated as periodic
   to remove block-edge transients and isolate pure stitching error. Do not switch to linear `lfilter`
   without re-deriving the delay/edge handling.
